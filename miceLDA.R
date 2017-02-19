@@ -1,20 +1,23 @@
 rm(list=ls());cat("\014")
 source(file="~/Dropbox/Documents/R/ipak.R")
-packages <- c("VIM","mice")
+packages <- c("VIM","mice","cmprsk","ggplot2")
 ipak(packages)
 ##
 ### Data generation
 ##
 set.seed(123)
-K<-2 # Number of causes of death
+mc<-1000 # number of MC samples
+n<-500 #Number of subjects
+K<-1 # Number of causes of death
+N<-5 # N number of intervals per subject
 
 ## This is the matrix of parameters of interest, possibly different
 ## at each interval
 psi.mat<-matrix(0,nrow=K,ncol=N+1)
 
 ##Here are the effect sizes for the K=2 causes
-psi.mat[1,]<- -log(2.5)
-psi.mat[2,]<- log(4.5)
+psi.mat[1,]<- log(2.5)
+#psi.mat[2,]<- log(2)
 
 ##Here the (untreated) all-cause rate is set to lambda=0.01, with
 ##lambda/K per cause; muK=lambda is used in the algorithm.
@@ -32,16 +35,16 @@ bevec<-c(log(3/7),log(4),log(0.5),log(1.5))
 alvec<-c(log(2/7),0.5,0.5,log(4))
 
 ##cval is used as in Young's algorithm to introduce the confounding
-
-cval<-80
+cval<-18.5
 
 ##Begin the data-generation loop
+a<-1;b<-n;c<-N
 sim_dat<-numeric()
 simfunc<-function(a,b,c){
       for(i in 1:b){
         ##Generate the counterfactual (untreated) survival time
         T0<-rexp(1,lambda)
-        Ival<-as.numeric(T0 < cval)
+        Ival<-as.numeric(T0<cval) # 
         ##Begin the interval-by-interval simulation
         m<-0
         mu.tot<-0
@@ -112,14 +115,60 @@ simfunc<-function(a,b,c){
       return(sim_dat)
 }
 
-mc<-10 # number of MC samples
-n<-500 #Number of subjects
-N<-5 #number of intervals per subject
+# mc number of MC samples
+# n Number of subjects
+# N number of intervals per subject
 t2<-lapply(1:mc,function(x) simfunc(x,n,N))
 str(t2)
 
-head(sim_dat,50)
-tail(sim_dat,50)
+plot(NULL)
+for(i in 1:mc){
+  par(new=T)
+  plot(cuminc(t2[[i]]$t,t2[[i]]$y,cencode=0),col=c("gray","blue"))  
+}
+
+head(t2[[3]])
+
+# MSM
+# exposure model
+pFunc<-function(a,b,c){
+  aa<-predict(glm(b,data=c),type="response")
+  aa<-aa*a+(1-aa)*(1-a)
+  return(aa)
+}
+
+wght<-function(a){
+  f_num<-as.formula(x~Int)
+  f_den<-as.formula(x~Int+x1+z+z1)
+  
+  a$x_num<-pFunc(a$x,f_num,a)
+  a$x_den<-pFunc(a$x,f_den,a)
+  
+  a$x_num<-ave(a$x_num,a$id,FUN=cumprod)
+  a$x_den<-ave(a$x_den,a$id,FUN=cumprod)
+  
+  a$sw<-a$x_num/a$x_den
+  aggregate(a$sw,list(a$Int),mean)
+  a$x_num<-NULL
+  a$x_den<-NULL
+  return(a)
+}
+
+q<-lapply(1:mc,function(x) wght(t2[[x]]))
+
+ggplot(q[[10]], aes(x=as.factor(Int), y=log(sw))) +
+  geom_boxplot() +
+  geom_point(position = position_jitter(width = 0.2))
+
+psi_a<-psi_b<-numeric()
+for(i in 1:mc){
+  m1<-coxph(Surv(Int-1,t,y)~x+cluster(id),data=q[[i]])
+  psi_a<-rbind(psi_a,c(exp(coef(m1)),summary(m1)$coefficients[4]))
+  m2<-coxph(Surv(Int-1,t,y)~x+cluster(id),weight=sw,data=q[[i]])
+  psi_b<-rbind(psi_b,c(exp(coef(m2)),summary(m2)$coefficients[4]))
+}
+c(mean(psi_a[,1]),mean(psi_a[,2]),sd(log(psi_a[,1])))
+c(mean(psi_b[,1]),mean(psi_b[,2]),sd(log(psi_b[,1])))
 
 
 
