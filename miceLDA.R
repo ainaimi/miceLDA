@@ -7,13 +7,23 @@ ipak(packages)
 ##
 set.seed(123)
 mc<-1000 # number of MC samples
-n<-500 #Number of subjects
+n<-250 #Number of subjects
 K<-1 # Number of causes of death
 N<-5 # N number of intervals per subject
 
 ## This is the matrix of parameters of interest, possibly different
 ## at each interval
 psi.mat<-matrix(0,nrow=K,ncol=N+1)
+
+##Here are the coefficients determining the
+##mediation and treatment assignment mechanisms.
+cvec<-c(-1*.75,.25)
+  b.Int<-(log((1/(1-.25))-1)-log(4)*0.75-log(0.5)*.5-log(1.5)*.5-log(2)*0)
+bevec<-c(b.Int,log(4),log(0.5),log(1.5),log(2))
+  a.Int<-(log((1/(1-.25))-1)-.5*.5-.5*.5-log(4)*.5-log(2)*0)
+alvec<-c(a.Int,.5,.5,log(4),log(2))
+  r.Int<-(log((1/(1-.15))-1)-log(1/4)*.75-.5*.5-.5*.5-log(4)*.5-log(2)*0)
+rlvec<-c(r.Int,log(1/4),0.5,0.5,log(4),log(2))
 
 ##Here are the effect sizes for the K=2 causes
 psi.mat[1,]<- log(2.5)
@@ -25,18 +35,11 @@ psi.mat[1,]<- log(2.5)
 lambda<-0.075
 gamma.vec<-rep(log(lambda/K))
 muK<-sum(exp(gamma.vec))
-R<-A<-L<-ID<-Y<-Z<-Tv<-Int<-ALast<-LLast<-RLast<-LFirst<-numeric()
-T0.vec<-T.vec<-Y.vec<-Z.vec<-rep(0,n)
-
-##Here are the coefficients determining the
-##mediation and treatment assignment mechanisms.
-
-bevec<-c(log(3/7),log(4),log(0.5),log(1.5))
-alvec<-c(log(2/7),0.5,0.5,log(4))
-rlvec<-c(log(1/12),log(1/4),0.5,0.5,log(4))
+C<-R<-A<-L<-ID<-Y<-Z<-Tv<-Int<-ALast<-LLast<-RLast<-LFirst<-numeric()
+T0.vec<-C.vec<-T.vec<-Y.vec<-Z.vec<-rep(0,n)
 
 ##cval is used as in Young's algorithm to introduce the confounding
-cval<-18.5
+cval<--log(1-.75)/lambda
 
 ##Begin the data-generation loop
 a<-1;b<-n;c<-N
@@ -45,7 +48,10 @@ simfunc<-function(a,b,c){
       for(i in 1:b){
         ##Generate the counterfactual (untreated) survival time
         T0<-rexp(1,lambda)
-        Ival<-as.numeric(T0<cval) # 
+        Ival<-as.numeric(T0<cval)
+        ##Continuous confounder
+        eta<-cvec[1]+cvec[2]*Ival
+        C<-rnorm(1,eta,1)
         ##Begin the interval-by-interval simulation
         m<-0
         mu.tot<-0
@@ -55,35 +61,31 @@ simfunc<-function(a,b,c){
         while(muK*T0 > mu.tot & m <= c){
           if(m == 0){
             ##First interval
-            eta<-bevec[1]+bevec[2]*Ival+bevec[3]*0+bevec[4]*0
+            eta<-bevec[1]+bevec[2]*Ival+bevec[3]*0+bevec[4]*0+bevec[5]*C
             pval<-1/(1+exp(-eta))
             L.vec[m+1]<-rbinom(1,1,pval)
-            eta<-alvec[1]+alvec[2]*L.vec[m+1]+alvec[3]*0+alvec[4]*0
+            eta<-alvec[1]+alvec[2]*L.vec[m+1]+alvec[3]*0+alvec[4]*0+alvec[5]*C
             pval<-1/(1+exp(-eta))
             A.vec[m+1]<-rbinom(1,1,pval)
-            
-            eta<-rlvec[1]+rlvec[2]*Ival+rlvec[3]*L.vec[m+1]+rlvec[4]*0+rlvec[5]*0
+            eta<-rlvec[1]+rlvec[2]*Ival+rlvec[3]*L.vec[m+1]+rlvec[4]*0+rlvec[5]*0+rlvec[6]*C
             pval<-1/(1+exp(-eta))
             R.vec[m+1]<-rbinom(1,1,pval)
-            
             ALast.vec[m+1]<-0;LLast.vec[m+1]<-0;RLast.vec[m+1]<-0
             LFirst.vec<-rep(L.vec[m+1],c+1)
           }else{
             ##Subsequent intervals
             eta<-bevec[1]+bevec[2]*Ival+bevec[3]*A.vec[m]+
-              bevec[4]*L.vec[m]
+              bevec[4]*L.vec[m]+bevec[5]*C
             pval<-1/(1+exp(-eta))
             L.vec[m+1]<-rbinom(1,1,pval)
             eta<-alvec[1]+alvec[2]*L.vec[m+1]+alvec[3]*L.vec[m]+
-              alvec[4]*A.vec[m]
+              alvec[4]*A.vec[m]+alvec[5]*C
             pval<-1/(1+exp(-eta))
             A.vec[m+1]<-rbinom(1,1,pval)
-            
             eta<-rlvec[1]+rlvec[2]*Ival+rlvec[3]*L.vec[m+1]+rlvec[4]*L.vec[m]+
-              rlvec[5]*A.vec[m]
+              rlvec[5]*A.vec[m]+rlvec[6]*C
             pval<-1/(1+exp(-eta))
             R.vec[m+1]<-rbinom(1,1,pval)
-            
             ALast.vec[m+1]<-A.vec[m];LLast.vec[m+1]<-L.vec[m];RLast.vec[m+1]<-R.vec[m]
           }
           muval<-sum(exp(gamma.vec+A.vec[m+1]*psi.mat[,m+1]))
@@ -106,6 +108,7 @@ simfunc<-function(a,b,c){
         }
         ##Store the outcomes
         T0.vec[i]<-T0
+        C.vec[i]<-C
         T.vec[i]<-Tval
         Y.vec[i]<-m-1
         ID<-c(ID,rep(i,m))
@@ -121,10 +124,10 @@ simfunc<-function(a,b,c){
         tv<-c(1:m);tv[m]<-Tval
         Tv<-c(Tv,tv)
       }
-      D<-data.frame(a,ID,Int,Tv,A,ALast,L,LLast,R,RLast,Z)
+      D<-data.frame(a,ID,Int,Tv,C,A,ALast,L,LLast,R,RLast,Z)
       ##Trim off the intervals beyond the Nth (loop goes one too far)
       D<-D[D$Int<=c,]
-      names(D)<-c("mc","id","Int","t","x","x1","z","z1","r","r1","y")
+      names(D)<-c("mc","id","Int","t","c","x","x1","z","z1","r","r1","y")
       sim_dat<-rbind(sim_dat,D)
       return(sim_dat)
 }
@@ -133,7 +136,9 @@ simfunc<-function(a,b,c){
 # n Number of subjects
 # N number of intervals per subject
 t2<-lapply(1:mc,function(x) simfunc(x,n,N))
+head(t2[[11]])
 
+# Replace observed with NA for those with R=1
 r_mean<-unlist(lapply(1:mc,function(x) mean(t2[[x]]$r)))
 mean(r_mean)
 str(t2)
@@ -148,7 +153,6 @@ mFunc<-function(a){
 }
 
 t2<-lapply(1:mc,function(x) mFunc(t2[[x]]))
-str(t2)
 head(t2[[12]],20)
 aggr(t2[[14]])
 
@@ -156,31 +160,31 @@ g2<-rgb(169/255,169/255,169/255,alpha=0.05)
 plot(NULL)
 for(i in 1:mc){
   par(new=T)
-  plot(cuminc(t2[[i]]$t,t2[[i]]$y,cencode=0),col=g2)  
+  plot(cuminc(t2[[i]]$t,t2[[i]]$y,cencode=0),col=g2,xlim=c(0,5),ylim=c(0,.3))  
 }
 
 # MSM
 # exposure model
 pFunc<-function(a,b,c){
-  aa<-predict(glm(b,data=c),type="response")
+  aa<-predict(glm(b,data=c,family=binomial("logit")),type="response")
   aa<-aa*a+(1-aa)*(1-a)
   return(aa)
 }
 
 wght<-function(a){
   f_num<-as.formula(x~Int)
-  f_den<-as.formula(x~Int+x1+z+z1)
-  
-  a$x_num<-pFunc(a$x,f_num,a)
-  a$x_den<-pFunc(a$x,f_den,a)
-  
+  f_den<-as.formula(x~Int+x1+z+z1+c)
+
+  a$x_num<-ifelse(is.na(a$x),1,pFunc(a$x,f_num,a))
+  a$x_den<-ifelse(is.na(a$x),1,pFunc(a$x,f_den,a))
+
   a$x_num<-ave(a$x_num,a$id,FUN=cumprod)
   a$x_den<-ave(a$x_den,a$id,FUN=cumprod)
-  
+
   a$sw<-a$x_num/a$x_den
   
-  f_num<-as.formula(x_m~Int)
-  f_den<-as.formula(x_m~Int+x_m1+z+z1)
+  f_num<-as.formula(x_m~as.factor(Int))
+  f_den<-as.formula(x_m~as.factor(Int)+x_m1+z+z1+c)
   
   a$x_num<-pFunc(a$x_m,f_num,a)
   a$x_den<-pFunc(a$x_m,f_den,a)
@@ -189,42 +193,40 @@ wght<-function(a){
   a$x_den<-ave(a$x_den,a$id,FUN=cumprod)
   
   a$sw_m<-a$x_num/a$x_den
-  a$x_num<-NULL
-  a$x_den<-NULL
-
+  a$FLAG<-ifelse(a$sw_m<0,1,0)
+  #a$x_num<-NULL
+  #a$x_den<-NULL
   return(a)
 }
 
 q<-lapply(1:mc,function(x) wght(t2[[x]]))
 
-ggplot(q[[10]], aes(x=as.factor(Int), y=log(sw))) +
-  geom_boxplot() +
-  geom_point(position = position_jitter(width = 0.2))
+a<-do.call(rbind,q)
+head(subset(a,a$FLAG==1))
+head(subset(a,a$id==131&a$mc==31))
 
-ggplot(q[[10]], aes(x=as.factor(Int), y=log(sw_m))) +
-  geom_boxplot() +
-  geom_point(position = position_jitter(width = 0.2))
+# ggplot(q[[10]], aes(x=as.factor(Int), y=log(sw))) +
+#   geom_boxplot() +
+#   geom_point(position = position_jitter(width = 0.2))
+# 
+# ggplot(q[[10]], aes(x=as.factor(Int), y=log(sw_m))) +
+#   geom_boxplot() +
+#   geom_point(position = position_jitter(width = 0.2))
 
 psi_a<-psi_b<-psi_c<-psi_d<-numeric()
-for(i in 1:mc){
-  #TRUE
-  m1<-coxph(Surv(Int-1,t,y)~x_m+cluster(id),data=q[[i]])
-  psi_a<-rbind(psi_a,c(exp(coef(m1)),summary(m1)$coefficients[4]))
-  m2<-coxph(Surv(Int-1,t,y)~x_m+cluster(id),weight=sw_m,data=q[[i]])
-  psi_b<-rbind(psi_b,c(exp(coef(m2)),summary(m2)$coefficients[4]))
-  #COMPLETE CASE
-  m1<-coxph(Surv(Int-1,t,y)~x+cluster(id),data=q[[i]])
-  psi_c<-rbind(psi_c,c(exp(coef(m1)),summary(m1)$coefficients[4]))
-  m2<-coxph(Surv(Int-1,t,y)~x+cluster(id),weight=sw,data=q[[i]])
-  psi_d<-rbind(psi_d,c(exp(coef(m2)),summary(m2)$coefficients[4]))
+eFunc<-function(a,b,c){
+  m1<-coxph(Surv(Int-1,t,y)~a+cluster(id),weights=b,data=c)
+  p<-c(exp(coef(m1)),summary(m1)$coefficients[4])
+  return(p)
 }
+
+psi_a<-do.call(rbind,(lapply(1:mc,function(x) eFunc(q[[x]]$x_m,NULL,q[[x]]))))
+psi_b<-do.call(rbind,(lapply(1:mc,function(x) eFunc(q[[x]]$x_m,q[[x]]$sw_m,q[[x]]))))
+
+psi_c<-do.call(rbind,(lapply(1:mc,function(x) eFunc(q[[x]]$x,NULL,q[[x]]))))
+psi_d<-do.call(rbind,(lapply(1:mc,function(x) eFunc(q[[x]]$x,q[[x]]$sw,q[[x]]))))
+
 c(mean(psi_a[,1]),mean(psi_a[,2]),sd(log(psi_a[,1])))
 c(mean(psi_b[,1]),mean(psi_b[,2]),sd(log(psi_b[,1])))
 c(mean(psi_c[,1]),mean(psi_c[,2]),sd(log(psi_c[,1])))
 c(mean(psi_d[,1]),mean(psi_d[,2]),sd(log(psi_d[,1])))
-
-
-
-
-
-
