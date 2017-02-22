@@ -1,6 +1,6 @@
 rm(list=ls());cat("\014")
 source(file="~/Dropbox/Documents/R/ipak.R")
-packages <- c("VIM","mice","cmprsk","ggplot2")
+packages <- c("VIM","mice","cmprsk","ggplot2","data.table")
 ipak(packages)
 ##
 ### Data generation
@@ -10,6 +10,8 @@ mc<-1000 # number of MC samples
 n<-250 #Number of subjects
 K<-1 # Number of causes of death
 N<-5 # N number of intervals per subject
+iterations<-10 # number of iterations for MICE
+imputations<-5 # number of imputations for MICE
 
 ## This is the matrix of parameters of interest, possibly different
 ## at each interval
@@ -154,7 +156,7 @@ mFunc<-function(a){
 
 t2<-lapply(1:mc,function(x) mFunc(t2[[x]]))
 head(t2[[12]],20)
-aggr(t2[[14]])
+aggr(t2[[12]])
 
 g2<-rgb(169/255,169/255,169/255,alpha=0.05)
 plot(NULL)
@@ -172,8 +174,8 @@ pFunc<-function(a,b,c){
 }
 
 wght<-function(a){
-  f_num<-as.formula(x~Int)
-  f_den<-as.formula(x~Int+x1+z+z1+c)
+  f_num<-as.formula(x~as.factor(Int))
+  f_den<-as.formula(x~as.factor(Int)+x1+z+z1+c)
 
   a$x_num<-ifelse(is.na(a$x),1,pFunc(a$x,f_num,a))
   a$x_den<-ifelse(is.na(a$x),1,pFunc(a$x,f_den,a))
@@ -193,25 +195,20 @@ wght<-function(a){
   a$x_den<-ave(a$x_den,a$id,FUN=cumprod)
   
   a$sw_m<-a$x_num/a$x_den
-  a$FLAG<-ifelse(a$sw_m<0,1,0)
-  #a$x_num<-NULL
-  #a$x_den<-NULL
+  a$x_num<-NULL
+  a$x_den<-NULL
   return(a)
 }
 
 q<-lapply(1:mc,function(x) wght(t2[[x]]))
 
-a<-do.call(rbind,q)
-head(subset(a,a$FLAG==1))
-head(subset(a,a$id==131&a$mc==31))
-
 # ggplot(q[[10]], aes(x=as.factor(Int), y=log(sw))) +
 #   geom_boxplot() +
 #   geom_point(position = position_jitter(width = 0.2))
 # 
-# ggplot(q[[10]], aes(x=as.factor(Int), y=log(sw_m))) +
+# ggplot(do.call(rbind,q), aes(x=as.factor(Int), y=log(sw_m))) +
 #   geom_boxplot() +
-#   geom_point(position = position_jitter(width = 0.2))
+#   geom_point(position = position_jitter(width = 0.2),color=g2)
 
 psi_a<-psi_b<-psi_c<-psi_d<-numeric()
 eFunc<-function(a,b,c){
@@ -230,3 +227,91 @@ c(mean(psi_a[,1]),mean(psi_a[,2]),sd(log(psi_a[,1])))
 c(mean(psi_b[,1]),mean(psi_b[,2]),sd(log(psi_b[,1])))
 c(mean(psi_c[,1]),mean(psi_c[,2]),sd(log(psi_c[,1])))
 c(mean(psi_d[,1]),mean(psi_d[,2]),sd(log(psi_d[,1])))
+
+##multiple imputation
+head(q[[10]])
+fFunc<-function(a){
+  a$x1<-a$x_m<-a$x_m1<-a$sw<-a$sw_m<-NULL
+  a$x<-as.factor(a$x)
+  return(a)
+}
+q<-lapply(1:mc,function(x) fFunc(q[[x]]))
+head(q[[10]],20)
+
+ini <- mice(q[[10]],seed=123,maxit=0)
+pMatrix<-ini$predictorMatrix
+pMatrix[6,]<-c(0,0,1,0,1,0,1,1,0)
+pMatrix
+
+methd<-c("","","","","","logreg","","","")
+
+imp<-lapply(q,function(x) mice(x,seed=123,maxit=iterations,m=imputations,
+                               method=methd,
+                               predictorMatrix=pMatrix,
+                               diagnostics=T))
+
+alph<-.02
+rr<-rgb(1,0,0,alpha=alph)
+gg<-rgb(0,205/255,0,alpha=alph)
+bb<-rgb(0,0,1,alpha=alph)
+cc<-rgb(0,1,1,alpha=alph)
+mm<-rgb(1,0,1,alpha=alph)
+pal=c(rr,gg,bb,cc,mm)
+plot(1:iterations,imp[[1]]$chainMean[1,,1]-1,col=rgb(1,0,0,alpha=0),
+     type="l",ylim=c(0,.3),xlab="Iteration",ylab="Mean of X",
+     las=1,tcl=-.1,yaxs="i",xaxs="i")
+for(i in 1:mc){
+  par(new=T)
+  plot(1:iterations,imp[[i]]$chainMean[1,,1]-1,type="l",ylim=c(0,.3),col=pal[1],ylab="",xlab="",xaxt="n",yaxt="n",yaxs="i",xaxs="i")
+  lapply(2:imputations,function(x) lines(imp[[i]]$chainMean[1,,x]-1,col=pal[x]))  
+}
+
+imp_dat<-lapply(1:mc,function(x) complete(imp[[x]],"long"))
+nu<-function(a){
+  # convert from factor to numeric
+  a$x<-as.numeric(a$x)-1
+  a$Int<-a$Int-1
+  # lag the imputed exposure
+  a<-data.table(a)
+  a[, x1:=c(0, x[-.N]), by=id]
+  return(a)
+  }
+impD<-lapply(1:mc,function(a) nu(imp_dat[[a]]))
+head(impD[[11]],10)
+str(impD)
+
+pFunc<-function(a){
+  for(i in 1:imputations){
+    a$num<-predict(glm(x~as.factor(Int)+cluster(id),
+                       family=binomial("logit"),
+                       data=a,subset=.imp==i),type="response")
+    a$num<-a$num*a$x+(1-a$num)*(1-a$x)
+    
+    a$den<-predict(glm(x~as.factor(Int)+x1+z+z1+c+cluster(id),
+                       family=binomial("logit"),
+                       data=a,subset=.imp==i),type="response")
+    a$den<-a$den*a$x+(1-a$den)*(1-a$x)
+    
+    a$sw<-ave(a$num/a$den,a$id,FUN=cumprod)
+    a$num<-a$den<-NULL
+    return(a)
+  }
+}
+t<-lapply(1:mc,function(x) pFunc(impD[[x]]))
+
+head(t[[1]])
+
+psi_e<-psi_f<-p<-numeric()
+eFunc<-function(a,b){
+  for(i in 1:imputations){
+  m1<-coxph(Surv(Int,t,y)~x+cluster(id),weights=sw,data=a,subset=.imp==i)
+  p<-rbind(p,cbind(b,i,coef(m1),summary(m1)$coefficients[4]))
+  }
+  return(p)
+}
+
+psi_e<-lapply(1:mc,function(x,y) eFunc(t[[x]],x))
+p<-data.frame(do.call(rbind,psi_e))
+tail(p,50)
+names(p)<-c("mc","imp","psi","se")
+psi_f<-do.call(rbind,(lapply(1:mc,function(x) eFunc(q[[x]]$x,q[[x]]$sw,q[[x]]))))
